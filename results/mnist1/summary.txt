@@ -1,0 +1,7 @@
+RESULTS:
+Trained in 329 epochs.
+LR = 0.01
+DECAY_LR = False
+Freeze RBMS = True
+Final Accuracy = 0.9662
+Final Cross Entropy Loss = 0.104769

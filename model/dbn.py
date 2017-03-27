@@ -1,5 +1,6 @@
 import numpy as np
 import tensorflow as tf
+import os
 
 def make_full_layer(graph, name, num_inputs, input_tensor, num_units, activation):
     assert activation in ['relu', 'sigmoid', 'softmax']
@@ -94,7 +95,7 @@ class DBN:
         self.name = name
         self.activations = connected_activations
 
-    def pretrain(self, train_set, learning_rate=0.01):
+    def pretrain(self, train_set, pretrain_iterations=10000, learning_rate=0.01):
         train = train_set
         if len(train.shape) != 2:
             train = self.flatten_array(train)
@@ -104,7 +105,7 @@ class DBN:
             since_improve = 0
             lr = learning_rate
             print('Pretraining layer', i+1, 'of', len(self.rbms))
-            for j in range(100):
+            for j in range(pretrain_iterations):
                 if j % 1000 == 0:
                     print('.')
                 output = train[np.random.randint(0,train.shape[0],1)]
@@ -129,7 +130,8 @@ class DBN:
             size *= dim
         return np.reshape(np_array, [-1,size])
 
-    def train(self, train_set, train_labels, validation_set, validation_labels, batch_size=100):
+    def train(self, train_set, train_labels, validation_set, validation_labels,
+              save_dir, learning_rate, decay_lr, freeze_rbms, batch_size=100):
         if train_set.ndim != 2 or validation_set.ndim != 2:
             print('Training set and validation set must have dimension of 2')
             return None
@@ -138,13 +140,22 @@ class DBN:
             print('Training and validation labels must have dimnsion of 2')
             return None
 
-        self.build_graph(train_set.shape[1], train_labels.shape[1])
-        print(self.loss.shape)
+        self.build_graph(train_set.shape[1],
+                         train_labels.shape[1],
+                         learning_rate,
+                         freeze_rbms)
+
         epochs = 0
         since_improved = 0
         best_loss = 999999.0
+        loss_hist = []
+
         with self.graph.as_default():
             init = tf.global_variables_initializer()
+            model_saver = tf.train.Saver()
+            if not os.path.exists(save_dir):
+                os.makedirs(save_dir)
+
             with tf.Session() as sess:
                 sess.run(init)
                 while(since_improved < 5):
@@ -159,19 +170,39 @@ class DBN:
 
                     loss_ = sess.run(self.loss, feed_dict={self.in_placeholder: validation_set,
                                                         self.out_placeholder: validation_labels})
+                    loss_hist.append(loss_)
                     if loss_ < best_loss:
                         best_loss = loss_
                         since_improved = 0
+                        model_saver.save(sess,
+                                         os.path.join(save_dir, 'train.ckpt'),
+                                         global_step=self.global_step)
                     else:
                         since_improved += 1
 
                     epochs += 1
-                    print(best_loss)
+                    print('Epoch', epochs,'\nBest Loss:', best_loss, '\n')
 
-        print('finished training. Best loss = ', best_loss)
+        print('finished training. Best validation loss = ', best_loss)
+        return loss_hist
+
+    def measure_test_accuracy(self, test_set, test_labels, save_dir):
+        with self.graph.as_default():
+            with tf.Session() as sess:
+                model_loader = tf.train.Saver()
+                init = tf.global_variables_initializer()
+                sess.run(init)
+                model_loader.restore(sess, tf.train.latest_checkpoint(save_dir))
+                accuracy, loss = sess.run(
+                                    [self.accuracy, self.loss],
+                                    feed_dict={
+                                        self.in_placeholder: test_set,
+                                        self.out_placeholder: test_labels})
+
+                return accuracy, loss
 
 
-    def build_graph(self, input_size, output_size):
+    def build_graph(self, input_size, output_size, learning_rate, freeze):
         g = tf.Graph()
         with g.as_default():
             self.in_placeholder = tf.placeholder(tf.float32, [None, input_size])
@@ -179,7 +210,7 @@ class DBN:
 
             out = self.in_placeholder
             for rbm in self.rbms:
-                out = rbm.build_graph(graph=g, input_tensor=out)
+                out = rbm.build_graph(graph=g, input_tensor=out, is_frozen=freeze)
 
             num_prev_outputs = self.rbms[-1].num_hidden
             for i, connected in enumerate(self.fully_connected_layers):
@@ -206,8 +237,11 @@ class DBN:
                 with tf.name_scope('accuracy'):
                     self.accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
 
-            global_step = tf.Variable(0, name='global_step', trainable=False)
-            self.train_op = tf.train.GradientDescentOptimizer(0.1).minimize(self.loss, global_step=global_step)
+            self.global_step = tf.Variable(0, name='global_step', trainable=False)
+            self.train_op = tf.train.GradientDescentOptimizer(learning_rate)
+            self.train_op = self.train_op.minimize(
+                                            self.loss,
+                                            global_step=self.global_step)
 
         self.graph = g
 
