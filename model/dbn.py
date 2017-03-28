@@ -1,6 +1,7 @@
 import numpy as np
 import tensorflow as tf
 import os
+from tqdm import tqdm
 
 def make_full_layer(graph, name, num_inputs, input_tensor, num_units, activation):
     assert activation in ['relu', 'sigmoid', 'softmax']
@@ -66,7 +67,10 @@ class RBMLayer:
         self.W += delta_W.T
         return np.sum(np.absolute(delta_W))
 
-    def build_graph(self, graph, input_tensor, is_frozen=True, is_sampled=False):
+    def build_graph(self, graph, input_tensor, is_frozen=True,
+                    activation='sigmoid', is_sampled=False):
+        assert activation in ['sigmoid', 'relu']
+
         with graph.as_default():
             with tf.name_scope(self.name):
                 if is_frozen:
@@ -78,11 +82,22 @@ class RBMLayer:
                 '''if is_sampled:
                     return tf.nn.relu()
                 else:'''
-                return tf.nn.sigmoid(tf.matmul(input_tensor, weights) + bias)
+                net = tf.matmul(input_tensor, weights) + bias
+                if activation == 'sigmoid':
+                    return tf.nn.sigmoid(net)
+                elif activation == 'relu':
+                    return tf.nn.relu(net)
+
+    def build_gen_graph(self, graph, input_tensor):
+        with graph.as_default():
+            
 
 class DBN:
-    def __init__(self, hidden_layers, fully_connected_layers=[200],
-                 connected_activations=['relu'], output_activation='softmax',
+    def __init__(self, hidden_layers, freeze_rbms, rbm_activation,
+                 fully_connected_layers=[200],
+                 connected_activations=['relu'],
+                 output_activation='softmax',
+                 keep_chance=0.9,
                  name='dbn'):
         self.rbms = []
         for l in hidden_layers:
@@ -94,6 +109,9 @@ class DBN:
         self.output_activation = output_activation
         self.name = name
         self.activations = connected_activations
+        self.rbm_activation = rbm_activation
+        self.freeze = freeze_rbms
+        self.keep_chance = keep_chance
 
     def pretrain(self, train_set, pretrain_iterations=10000, learning_rate=0.01):
         train = train_set
@@ -105,9 +123,7 @@ class DBN:
             since_improve = 0
             lr = learning_rate
             print('Pretraining layer', i+1, 'of', len(self.rbms))
-            for j in range(pretrain_iterations):
-                if j % 1000 == 0:
-                    print('.')
+            for j in tqdm(range(pretrain_iterations)):
                 output = train[np.random.randint(0,train.shape[0],1)]
                 for rbm in self.rbms[:i]:
                     output = rbm.sample_hidden_from_visible(output)
@@ -131,7 +147,7 @@ class DBN:
         return np.reshape(np_array, [-1,size])
 
     def train(self, train_set, train_labels, validation_set, validation_labels,
-              save_dir, learning_rate, decay_lr, freeze_rbms, batch_size=100):
+              save_dir, learning_rate, decay_lr, batch_size=100):
         if train_set.ndim != 2 or validation_set.ndim != 2:
             print('Training set and validation set must have dimension of 2')
             return None
@@ -140,16 +156,15 @@ class DBN:
             print('Training and validation labels must have dimnsion of 2')
             return None
 
-        self.build_graph(train_set.shape[1],
-                         train_labels.shape[1],
-                         learning_rate,
-                         freeze_rbms)
+        self.build_graph(input_size=train_set.shape[1],
+                         output_size=train_labels.shape[1],
+                         learning_rate=learning_rate)
 
         epochs = 0
         since_improved = 0
         best_loss = 999999.0
         loss_hist = []
-
+        accuracy_hist = []
         with self.graph.as_default():
             init = tf.global_variables_initializer()
             model_saver = tf.train.Saver()
@@ -158,7 +173,7 @@ class DBN:
 
             with tf.Session() as sess:
                 sess.run(init)
-                while(since_improved < 5):
+                while(since_improved < 10):
                     start = 0
                     train_set, train_labels = self.unison_shuffle(train_set, train_labels)
                     while(start + batch_size < train_set.shape[0]):
@@ -166,11 +181,15 @@ class DBN:
                         start += batch_size
                         _ = sess.run([self.train_op],
                                       feed_dict={self.in_placeholder: batch_data,
-                                                 self.out_placeholder: batch_labels})
+                                                 self.out_placeholder: batch_labels,
+                                                 self.dropout_placeholder: self.keep_chance})
 
-                    loss_ = sess.run(self.loss, feed_dict={self.in_placeholder: validation_set,
-                                                        self.out_placeholder: validation_labels})
+                    loss_, acc = sess.run([self.loss,self.accuracy],
+                                          feed_dict={self.in_placeholder: validation_set,
+                                                     self.out_placeholder: validation_labels,
+                                                     self.dropout_placeholder: 1.0})
                     loss_hist.append(loss_)
+                    accuracy_hist.append(acc)
                     if loss_ < best_loss:
                         best_loss = loss_
                         since_improved = 0
@@ -181,10 +200,10 @@ class DBN:
                         since_improved += 1
 
                     epochs += 1
-                    print('Epoch', epochs,'\nBest Loss:', best_loss, '\n')
+                    print('Epoch', epochs,'\nBest Loss:', best_loss, '\nCur Validation Accuracy:', acc, '\n')
 
         print('finished training. Best validation loss = ', best_loss)
-        return loss_hist
+        return loss_hist, accuracy_hist
 
     def measure_test_accuracy(self, test_set, test_labels, save_dir):
         with self.graph.as_default():
@@ -197,23 +216,29 @@ class DBN:
                                     [self.accuracy, self.loss],
                                     feed_dict={
                                         self.in_placeholder: test_set,
-                                        self.out_placeholder: test_labels})
+                                        self.out_placeholder: test_labels,
+                                        self.dropout_placeholder: 1.0})
 
                 return accuracy, loss
 
 
-    def build_graph(self, input_size, output_size, learning_rate, freeze):
+    def build_graph(self, input_size, output_size, learning_rate):
         g = tf.Graph()
         with g.as_default():
             self.in_placeholder = tf.placeholder(tf.float32, [None, input_size])
             self.out_placeholder = tf.placeholder(tf.float32, [None, output_size])
+            self.dropout_placeholder = tf.placeholder(tf.float32)
 
             out = self.in_placeholder
             for rbm in self.rbms:
-                out = rbm.build_graph(graph=g, input_tensor=out, is_frozen=freeze)
+                out = rbm.build_graph(graph=g,
+                                      input_tensor=out,
+                                      is_frozen=self.freeze,
+                                      activation=self.rbm_activation)
 
             num_prev_outputs = self.rbms[-1].num_hidden
             for i, connected in enumerate(self.fully_connected_layers):
+                out = tf.nn.dropout(out, self.dropout_placeholder)
                 out, _ = make_full_layer(
                         graph=g, name='fully_connected_'+str(i),
                         num_inputs=num_prev_outputs, num_units=connected,
@@ -225,6 +250,7 @@ class DBN:
                     graph=g, name='softmax_output',num_inputs=num_prev_outputs,
                     num_units=output_size, activation='softmax',
                     input_tensor=out)
+
 
             with tf.name_scope('loss'):
                 loss = tf.nn.softmax_cross_entropy_with_logits(
@@ -238,7 +264,7 @@ class DBN:
                     self.accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
 
             self.global_step = tf.Variable(0, name='global_step', trainable=False)
-            self.train_op = tf.train.GradientDescentOptimizer(learning_rate)
+            self.train_op = tf.train.MomentumOptimizer(learning_rate, momentum=0.9)
             self.train_op = self.train_op.minimize(
                                             self.loss,
                                             global_step=self.global_step)

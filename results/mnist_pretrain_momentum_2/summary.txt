@@ -1,0 +1,10 @@
+RESULTS:
+Trained in 57 epochs.
+LR = 0.01
+DECAY_LR = False
+PRETRAIN_ITERATIONS = 10000
+RBM_LAYERS = [400, 500, 450]
+Freeze RBMS = False
+RBM activation = sigmoid
+Final Accuracy = 0.9766
+Final Cross Entropy Loss = 0.0771233
