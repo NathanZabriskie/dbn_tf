@@ -4,6 +4,7 @@ import numpy as np
 import os
 import matplotlib.pyplot as plt
 import pickle
+from scipy.io.arff import loadarff
 
 # Session settings
 SAVE_DIR = 'saves/t1'
