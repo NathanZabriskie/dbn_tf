@@ -8,14 +8,14 @@ from scipy.io.arff import loadarff
 
 # Session settings
 SAVE_DIR = 'saves/t1'
-OUTPUT_DIR = 'results/mnist_pretrain_momentum_dropout_JUMBO_smallLR2'
+OUTPUT_DIR = 'results/mnist_pretrain_momentum_dropout_JUMBO_smallLR2_win'
 if os.path.exists(OUTPUT_DIR):
     choice = input(OUTPUT_DIR + ' already exists. Do you want to overwrite these results? y/n')
     if choice != 'y':
         print('Exiting')
         exit()
 
-PRETRAIN_ITERATIONS = 10000
+PRETRAIN_ITERATIONS = 1
 LEARNING_RATE = 0.001
 DECAY_LR = False
 FREEZE_RBMS = False

@@ -90,7 +90,11 @@ class RBMLayer:
 
     def build_gen_graph(self, graph, input_tensor):
         with graph.as_default():
-            
+            with tf.name_scope(self.name+'_gen'):
+                weights = tf.constant(self.W.T, name='weights', dtype=tf.float32)
+                bias = tf.constant(self.bias_visible, name='bias', dtype=tf.float32)
+                net = tf.matmul(input_tensor, weights) + bias
+                return tf.nn.sigmoid(net)
 
 class DBN:
     def __init__(self, hidden_layers, freeze_rbms, rbm_activation,
@@ -112,6 +116,11 @@ class DBN:
         self.rbm_activation = rbm_activation
         self.freeze = freeze_rbms
         self.keep_chance = keep_chance
+        self.graph = None
+
+        self.rbm_out = None
+        self.gen_in_placeholder = None
+        self.gen_out = None
 
     def pretrain(self, train_set, pretrain_iterations=10000, learning_rate=0.01):
         train = train_set
@@ -221,9 +230,28 @@ class DBN:
 
                 return accuracy, loss
 
+    def build_gen_graph(self):
+        if self.graph is None:
+            self.graph = tf.Graph()
+
+        with self.graph.as_default():
+            self.gen_in_placeholder = tf.placeholder(
+                                        dtype=tf.float32,
+                                        shape=[self.rbms[-1].num_hidden],
+                                        name='gen_in')
+
+            gen_in = self.gen_in_placeholder
+            for rbm in self.rbms[::-1]:
+                gen_in = rbm.build_gen_graph(self.graph, gen_in)
+
+            self.gen_out = gen_in
 
     def build_graph(self, input_size, output_size, learning_rate):
-        g = tf.Graph()
+        if self.graph is None:
+            g = tf.Graph()
+        else:
+            g = self.graph
+
         with g.as_default():
             self.in_placeholder = tf.placeholder(tf.float32, [None, input_size])
             self.out_placeholder = tf.placeholder(tf.float32, [None, output_size])
@@ -236,6 +264,7 @@ class DBN:
                                       is_frozen=self.freeze,
                                       activation=self.rbm_activation)
 
+            self.rbm_out = out
             num_prev_outputs = self.rbms[-1].num_hidden
             for i, connected in enumerate(self.fully_connected_layers):
                 out = tf.nn.dropout(out, self.dropout_placeholder)
@@ -250,7 +279,6 @@ class DBN:
                     graph=g, name='softmax_output',num_inputs=num_prev_outputs,
                     num_units=output_size, activation='softmax',
                     input_tensor=out)
-
 
             with tf.name_scope('loss'):
                 loss = tf.nn.softmax_cross_entropy_with_logits(
