@@ -8,7 +8,7 @@ from scipy.io.arff import loadarff
 
 # Session settings
 SAVE_DIR = 'saves/t1'
-OUTPUT_DIR = 'results/mnist_pretrain_momentum_dropout_JUMBO_smallLR2_win'
+OUTPUT_DIR = 'results/mnist_something'
 if os.path.exists(OUTPUT_DIR):
     choice = input(OUTPUT_DIR + ' already exists. Do you want to overwrite these results? y/n')
     if choice != 'y':
@@ -16,12 +16,12 @@ if os.path.exists(OUTPUT_DIR):
         exit()
 
 PRETRAIN_ITERATIONS = 1
-LEARNING_RATE = 0.001
+LEARNING_RATE = 0.01
 DECAY_LR = False
 FREEZE_RBMS = False
 RBM_ACTIVATION = 'sigmoid'
 RBM_LAYERS = [600,625,650,600]
-KEEP_CHANCE = 0.8
+KEEP_CHANCE = 0.9
 
 IMAGE_SIZE = 28
 IMAGE_PIXELS = IMAGE_SIZE * IMAGE_SIZE

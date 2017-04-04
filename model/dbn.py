@@ -2,6 +2,7 @@ import numpy as np
 import tensorflow as tf
 import os
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 
 def make_full_layer(graph, name, num_inputs, input_tensor, num_units, activation):
     assert activation in ['relu', 'sigmoid', 'softmax']
@@ -88,13 +89,18 @@ class RBMLayer:
                 elif activation == 'relu':
                     return tf.nn.relu(net)
 
-    def build_gen_graph(self, graph, input_tensor):
+    def build_gen_graph(self, graph, input_tensor, sample):
         with graph.as_default():
             with tf.name_scope(self.name+'_gen'):
                 weights = tf.constant(self.W.T, name='weights', dtype=tf.float32)
                 bias = tf.constant(self.bias_visible, name='bias', dtype=tf.float32)
                 net = tf.matmul(input_tensor, weights) + bias
-                return tf.nn.sigmoid(net)
+
+                if sample:
+                    rnd = tf.random_uniform(net.shape, dtype=tf.float32)
+                    return tf.nn.relu(tf.sign(net - rnd)) # returns 0 or 1
+                else:
+                    return tf.nn.sigmoid(net)
 
 class DBN:
     def __init__(self, hidden_layers, freeze_rbms, rbm_activation,
@@ -122,7 +128,8 @@ class DBN:
         self.gen_in_placeholder = None
         self.gen_out = None
 
-    def pretrain(self, train_set, pretrain_iterations=10000, learning_rate=0.01):
+    def pretrain(self, train_set, pretrain_iterations=10000, learning_rate=0.01,
+                 save_dir=None):
         train = train_set
         if len(train.shape) != 2:
             train = self.flatten_array(train)
@@ -142,7 +149,7 @@ class DBN:
                     best_loss = loss
                     since_improve = 0
                 elif since_improve > 1000:
-                    lr *= 0.9
+                    lr *= 0.95
                     since_improve = 0
                 else:
                     since_improve += 1
@@ -154,6 +161,32 @@ class DBN:
         for dim in np_array.shape[1:]:
             size *= dim
         return np.reshape(np_array, [-1,size])
+
+    def generate_example(self, train_set, train_labels, save_dir, out_dir, num_generations=10):
+        if not os.path.exists(out_dir):
+            os.makedirs(out_dir)
+
+        with self.graph.as_default():
+            init = tf.global_variables_initializer()
+            model_saver = tf.train.Saver()
+            with tf.Session() as sess:
+                sess.run(init)
+
+                res = []
+                labels = []
+                for i in range(num_generations):
+                    example = np.random.randint(train_set.shape[0], size=1)
+                    labels.append(train_labels[example])
+                    train_image = train_set[example,:]
+                    im_in = np.reshape(train_image, [28,28])
+                    plt.imsave(os.path.join(out_dir, 'in'+str(i)+'.png'), im_in, cmap=plt.get_cmap('gray'))
+
+                    forward = sess.run(self.rbm_out, feed_dict={self.in_placeholder:train_image, self.dropout_placeholder:1.0})
+                    generated = sess.run(self.gen_out, feed_dict={self.gen_in_placeholder:forward})
+                    im_gen = np.reshape(generated, [28,28])
+                    plt.imsave(os.path.join(out_dir, 'gen'+str(i)+'.png'), im_gen, cmap=plt.get_cmap('gray'))
+
+                return res, labels
 
     def train(self, train_set, train_labels, validation_set, validation_labels,
               save_dir, learning_rate, decay_lr, batch_size=100):
@@ -230,23 +263,26 @@ class DBN:
 
                 return accuracy, loss
 
-    def build_gen_graph(self):
+    def build_gen_graph(self, sample=False):
         if self.graph is None:
             self.graph = tf.Graph()
 
         with self.graph.as_default():
             self.gen_in_placeholder = tf.placeholder(
                                         dtype=tf.float32,
-                                        shape=[self.rbms[-1].num_hidden],
+                                        shape=[1,self.rbms[-1].num_hidden],
                                         name='gen_in')
 
             gen_in = self.gen_in_placeholder
-            for rbm in self.rbms[::-1]:
-                gen_in = rbm.build_gen_graph(self.graph, gen_in)
+            for i, rbm in enumerate(self.rbms[::-1]):
+                if i == len(self.rbms) - 1:
+                    gen_in = rbm.build_gen_graph(self.graph, gen_in, False)
+                else:
+                    gen_in = rbm.build_gen_graph(self.graph, gen_in, sample)
 
             self.gen_out = gen_in
 
-    def build_graph(self, input_size, output_size, learning_rate):
+    def build_graph(self, input_size, output_size, learning_rate=0.01):
         if self.graph is None:
             g = tf.Graph()
         else:
@@ -255,7 +291,7 @@ class DBN:
         with g.as_default():
             self.in_placeholder = tf.placeholder(tf.float32, [None, input_size])
             self.out_placeholder = tf.placeholder(tf.float32, [None, output_size])
-            self.dropout_placeholder = tf.placeholder(tf.float32)
+            self.dropout_placeholder = tf.placeholder(tf.float32, name='dropout')
 
             out = self.in_placeholder
             for rbm in self.rbms:
@@ -263,6 +299,7 @@ class DBN:
                                       input_tensor=out,
                                       is_frozen=self.freeze,
                                       activation=self.rbm_activation)
+                out = tf.nn.dropout(out, self.dropout_placeholder)
 
             self.rbm_out = out
             num_prev_outputs = self.rbms[-1].num_hidden
@@ -292,7 +329,9 @@ class DBN:
                     self.accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
 
             self.global_step = tf.Variable(0, name='global_step', trainable=False)
-            self.train_op = tf.train.MomentumOptimizer(learning_rate, momentum=0.9)
+            decay_learning_rate = tf.train.exponential_decay(learning_rate, self.global_step,
+                                           1000000, 0.96, staircase=True)
+            self.train_op = tf.train.MomentumOptimizer(decay_learning_rate, momentum=0.9)
             self.train_op = self.train_op.minimize(
                                             self.loss,
                                             global_step=self.global_step)
