@@ -1,0 +1,12 @@
+RESULTS:
+Trained in 128 epochs.
+LR = 0.01
+Training dropout keep chance = 0.9
+DECAY_LR = False
+PRETRAIN_ITERATIONS = 10000
+RBM_LAYERS = [600, 625, 650, 600]
+Freeze RBMS = False
+SAMPLE = False
+RBM activation = sigmoid
+Final Accuracy = 0.9343
+Final Cross Entropy Loss = 0.240649

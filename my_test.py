@@ -1,15 +1,22 @@
 import math
 import tensorflow as tf
 from tensorflow.contrib.learn.python.learn.datasets.mnist import read_data_sets
+import numpy as np
 
 IMAGE_SIZE = 28
 IMAGE_PIXELS = IMAGE_SIZE * IMAGE_SIZE
-HIDDEN1_UNITS = 500
+HIDDEN1_UNITS = 200
 OUTPUT_UNITS = 10
+NUM_TRAINING = 60000
 
-tf.set_random_seed(0)
+def unison_shuffle(a, b):
+    assert len(a) == len(b)
+    p = np.random.permutation(len(a))
+    return a[p], b[p]
 
 mnist = read_data_sets("data", one_hot=True, reshape=False, validation_size=1000)
+training = mnist.train.images[0:NUM_TRAINING,:]
+training_labels = mnist.train.labels[0:NUM_TRAINING,:]
 
 with tf.name_scope('input'):
     X = tf.placeholder(tf.float32, [None, 28, 28, 1])
@@ -71,13 +78,12 @@ merged = tf.summary.merge_all()
 with tf.Session() as sess:
     sess.run(init)
     validation_writer = tf.summary.FileWriter('logs/train', sess.graph)
-
+    start = 0
     while(since_improved < 5):
-        images, labels = mnist.train.next_batch(100)
-        _, loss_, step = sess.run([train_op, loss, global_step], feed_dict={X: images, LABELS: labels})
-        if mnist.train.epochs_completed != epochs:
-            epochs = mnist.train.epochs_completed
-            print('Epochs Completed =', epochs)
+        if start + 100 > training.shape[0]:
+            start = 0
+            unison_shuffle(training, training_labels)
+            epochs += 1
             loss_, summ = sess.run([loss, merged], feed_dict={X: mnist.validation.images, LABELS: mnist.validation.labels})
             validation_writer.add_summary(summ, epochs)
             if loss_ < best_loss:
@@ -87,6 +93,10 @@ with tf.Session() as sess:
                 saver.save(sess, 'saves/test.ckpt', global_step=step)
             else:
                 since_improved += 1
+
+        images, labels = training[start:start+100], training_labels[start:start+100]
+        start += 100
+        _, loss_, step = sess.run([train_op, loss, global_step], feed_dict={X: images, LABELS: labels})
 
     validation_writer.close()
 

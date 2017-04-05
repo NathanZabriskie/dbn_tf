@@ -8,20 +8,22 @@ from scipy.io.arff import loadarff
 
 # Session settings
 SAVE_DIR = 'saves/t1'
-OUTPUT_DIR = 'results/mnist_something'
+OUTPUT_DIR = 'results/final/mnist_sampled2'
 if os.path.exists(OUTPUT_DIR):
     choice = input(OUTPUT_DIR + ' already exists. Do you want to overwrite these results? y/n')
     if choice != 'y':
         print('Exiting')
         exit()
 
-PRETRAIN_ITERATIONS = 1
+PRETRAIN_ITERATIONS = 10000
 LEARNING_RATE = 0.01
 DECAY_LR = False
 FREEZE_RBMS = False
+SAMPLE=True
 RBM_ACTIVATION = 'sigmoid'
 RBM_LAYERS = [600,625,650,600]
 KEEP_CHANCE = 0.9
+NUM_TRAIN = 60000
 
 IMAGE_SIZE = 28
 IMAGE_PIXELS = IMAGE_SIZE * IMAGE_SIZE
@@ -31,9 +33,13 @@ mnist = read_data_sets("data", one_hot=True, reshape=False, validation_size=6000
 deep = DBN(hidden_layers=RBM_LAYERS,
            rbm_activation=RBM_ACTIVATION,
            freeze_rbms=FREEZE_RBMS,
-           keep_chance=KEEP_CHANCE)
+           keep_chance=KEEP_CHANCE,
+           fully_connected_layers=[150,200],
+           connected_activations=['relu','relu'])
 
 flattened_train = np.reshape(mnist.train.images, [mnist.train.images.shape[0], -1])
+
+
 flattened_validation = np.reshape(mnist.validation.images,
                                   [mnist.validation.images.shape[0], -1])
 flattened_test = np.reshape(mnist.test.images, [mnist.test.images.shape[0], -1])
@@ -42,13 +48,18 @@ deep.pretrain(train_set=flattened_train,
               pretrain_iterations=PRETRAIN_ITERATIONS,
               learning_rate=LEARNING_RATE)
 
+# Remove "unlabeled" data for experiment
+flattened_train = flattened_train[0:NUM_TRAIN,:]
+train_labels = mnist.train.labels[0:NUM_TRAIN,:]
+
 loss_hist, acc_hist = deep.train(train_set=flattened_train,
-                                 train_labels=mnist.train.labels,
+                                 train_labels=train_labels,
                                  validation_set=flattened_validation,
                                  validation_labels=mnist.validation.labels,
                                  save_dir=SAVE_DIR,
                                  learning_rate=LEARNING_RATE,
-                                 decay_lr=DECAY_LR)
+                                 decay_lr=DECAY_LR,
+                                 is_sampled=SAMPLE)
 
 accuracy, loss = deep.measure_test_accuracy(test_set=flattened_test,
                                             test_labels=mnist.test.labels,
@@ -75,6 +86,7 @@ with open(os.path.join(OUTPUT_DIR, 'summary.txt'), 'w') as f:
     f.write('PRETRAIN_ITERATIONS = ' + str(PRETRAIN_ITERATIONS) + '\n')
     f.write('RBM_LAYERS = ' + str(RBM_LAYERS) + '\n')
     f.write('Freeze RBMS = ' + str(FREEZE_RBMS) + '\n')
+    f.write('SAMPLE = ' + str(SAMPLE) + '\n')
     f.write('RBM activation = ' + str(RBM_ACTIVATION) + '\n')
     f.write('Final Accuracy = ' + str(accuracy) + '\n')
     f.write('Final Cross Entropy Loss = ' + str(loss) + '\n')

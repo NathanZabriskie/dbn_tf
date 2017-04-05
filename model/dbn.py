@@ -84,23 +84,49 @@ class RBMLayer:
                     return tf.nn.relu()
                 else:'''
                 net = tf.matmul(input_tensor, weights) + bias
-                if activation == 'sigmoid':
+                if is_sampled:
+                    rnd = tf.random_uniform(shape=tf.shape(net), name='rnd', dtype=tf.float32)
+                    return tf.nn.relu(tf.sign(net-rnd))
+                elif activation == 'sigmoid':
                     return tf.nn.sigmoid(net)
                 elif activation == 'relu':
                     return tf.nn.relu(net)
 
-    def build_gen_graph(self, graph, input_tensor, sample):
+    def build_gen_graph(self, graph, input_tensor, sample, k=0):
         with graph.as_default():
             with tf.name_scope(self.name+'_gen'):
-                weights = tf.constant(self.W.T, name='weights', dtype=tf.float32)
-                bias = tf.constant(self.bias_visible, name='bias', dtype=tf.float32)
-                net = tf.matmul(input_tensor, weights) + bias
+                back_weights = tf.constant(self.W.T, name='weights_back', dtype=tf.float32)
+                front_weights = tf.constant(self.W, name='weights_forward', dtype=tf.float32)
+
+                bias_visible = tf.constant(self.bias_visible, name='bias_visible', dtype=tf.float32)
+                bias_hidden = tf.constant(self.bias_hidden, name='bias_hidden', dtype=tf.float32)
+                out = input_tensor
+
+                for i in range(k):
+                    out = tf.matmul(out, back_weights) + bias_visible # sample visible from hidden
+                    if sample:
+                        rnd = tf.random_uniform(out.shape, dtype=tf.float32)
+                        out = tf.nn.relu(tf.sign(out - rnd)) # returns 0 or 1
+                    else:
+                        out = tf.nn.sigmoid(out)
+
+                    out = tf.matmul(out, front_weights) + bias_hidden
+                    if sample:
+                        rnd = tf.random_uniform(out.shape, dtype=tf.float32)
+                        out = tf.nn.relu(tf.sign(out - rnd)) # returns 0 or 1
+                    else:
+                        out = tf.nn.sigmoid(out)
+
+
+                out = tf.matmul(out, back_weights) + bias_visible
 
                 if sample:
-                    rnd = tf.random_uniform(net.shape, dtype=tf.float32)
-                    return tf.nn.relu(tf.sign(net - rnd)) # returns 0 or 1
+                    rnd = tf.random_uniform(out.shape, dtype=tf.float32)
+                    out = tf.nn.relu(tf.sign(out - rnd)) # returns 0 or 1
                 else:
-                    return tf.nn.sigmoid(net)
+                    out = tf.nn.sigmoid(out)
+
+                return out
 
 class DBN:
     def __init__(self, hidden_layers, freeze_rbms, rbm_activation,
@@ -188,8 +214,22 @@ class DBN:
 
                 return res, labels
 
+    def generate_random_example(self, out_dir, num_generations):
+        if not os.path.exists(out_dir):
+            os.makedirs(out_dir)
+
+        with self.graph.as_default():
+            init = tf.global_variables_initializer()
+            with tf.Session() as sess:
+                sess.run(init)
+
+                for i in range(num_generations):
+                    generated = sess.run(self.random_gen_out)
+                    im_gen = np.reshape(generated, [28,28])
+                    plt.imsave(os.path.join(out_dir, 'gen'+str(i)+'.png'), im_gen, cmap=plt.get_cmap('gray'))
+
     def train(self, train_set, train_labels, validation_set, validation_labels,
-              save_dir, learning_rate, decay_lr, batch_size=100):
+              save_dir, learning_rate, decay_lr,  is_sampled, batch_size=100):
         if train_set.ndim != 2 or validation_set.ndim != 2:
             print('Training set and validation set must have dimension of 2')
             return None
@@ -200,7 +240,8 @@ class DBN:
 
         self.build_graph(input_size=train_set.shape[1],
                          output_size=train_labels.shape[1],
-                         learning_rate=learning_rate)
+                         learning_rate=learning_rate,
+                         is_sampled=is_sampled)
 
         epochs = 0
         since_improved = 0
@@ -282,7 +323,27 @@ class DBN:
 
             self.gen_out = gen_in
 
-    def build_graph(self, input_size, output_size, learning_rate=0.01):
+    def build_random_gen_graph(self, k, sample=False):
+        if self.graph is None:
+            self.graph = tf.Graph()
+
+        with self.graph.as_default():
+            gen_in = tf.random_uniform(
+                            dtype=tf.float32,
+                            shape=[1,self.rbms[-1].num_hidden],
+                            name='random_in')
+            last_rbm = self.rbms[-1]
+            for i, rbm in enumerate(self.rbms[::-1]):
+                if i == len(self.rbms) - 1:
+                    gen_in = rbm.build_gen_graph(self.graph, gen_in, False)
+                elif i == 0:
+                    gen_in = rbm.build_gen_graph(self.graph, gen_in, sample,k)
+                else:
+                    gen_in = rbm.build_gen_graph(self.graph, gen_in, sample)
+
+            self.random_gen_out = gen_in
+
+    def build_graph(self, input_size, output_size, is_sampled=False, learning_rate=0.01):
         if self.graph is None:
             g = tf.Graph()
         else:
@@ -298,11 +359,15 @@ class DBN:
                 out = rbm.build_graph(graph=g,
                                       input_tensor=out,
                                       is_frozen=self.freeze,
-                                      activation=self.rbm_activation)
+                                      activation=self.rbm_activation,
+                                      is_sampled=is_sampled)
                 out = tf.nn.dropout(out, self.dropout_placeholder)
 
             self.rbm_out = out
-            num_prev_outputs = self.rbms[-1].num_hidden
+            if not self.rbms:
+                num_prev_outputs = input_size
+            else:
+                num_prev_outputs = self.rbms[-1].num_hidden
             for i, connected in enumerate(self.fully_connected_layers):
                 out = tf.nn.dropout(out, self.dropout_placeholder)
                 out, _ = make_full_layer(
@@ -330,7 +395,7 @@ class DBN:
 
             self.global_step = tf.Variable(0, name='global_step', trainable=False)
             decay_learning_rate = tf.train.exponential_decay(learning_rate, self.global_step,
-                                           1000000, 0.96, staircase=True)
+                                           100000, 0.96, staircase=True)
             self.train_op = tf.train.MomentumOptimizer(decay_learning_rate, momentum=0.9)
             self.train_op = self.train_op.minimize(
                                             self.loss,
