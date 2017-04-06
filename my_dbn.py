@@ -6,16 +6,21 @@ import matplotlib.pyplot as plt
 import pickle
 from scipy.io.arff import loadarff
 
+def unison_shuffle(a, b):
+    assert len(a) == len(b)
+    p = np.random.permutation(len(a))
+    return a[p], b[p]
+
 # Session settings
 SAVE_DIR = 'saves/t1'
-OUTPUT_DIR = 'results/final/mnist_sampled2'
+OUTPUT_DIR = 'results/final/mnist_small_nopretrain2'
 if os.path.exists(OUTPUT_DIR):
     choice = input(OUTPUT_DIR + ' already exists. Do you want to overwrite these results? y/n')
     if choice != 'y':
         print('Exiting')
         exit()
 
-PRETRAIN_ITERATIONS = 10000
+PRETRAIN_ITERATIONS = 1
 LEARNING_RATE = 0.01
 DECAY_LR = False
 FREEZE_RBMS = False
@@ -23,7 +28,7 @@ SAMPLE=True
 RBM_ACTIVATION = 'sigmoid'
 RBM_LAYERS = [600,625,650,600]
 KEEP_CHANCE = 0.9
-NUM_TRAIN = 60000
+NUM_TRAIN = 5000
 
 IMAGE_SIZE = 28
 IMAGE_PIXELS = IMAGE_SIZE * IMAGE_SIZE
@@ -49,8 +54,9 @@ deep.pretrain(train_set=flattened_train,
               learning_rate=LEARNING_RATE)
 
 # Remove "unlabeled" data for experiment
+flattened_train, train_labels = unison_shuffle(flattened_train, mnist.train.labels)
 flattened_train = flattened_train[0:NUM_TRAIN,:]
-train_labels = mnist.train.labels[0:NUM_TRAIN,:]
+train_labels = train_labels[0:NUM_TRAIN,:]
 
 loss_hist, acc_hist = deep.train(train_set=flattened_train,
                                  train_labels=train_labels,
