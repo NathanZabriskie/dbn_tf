@@ -125,7 +125,8 @@
 	Under the conditions described in the previous experiments the DBN  often tied the MLP baseline in final accuracy but never outperformed it. In this case, however, the DBN was much more resilient to the shrinking of the training dataset than the MLP thanks to its ability to use unlabeled data.
 	
 	\section{Conclusion}
+	From the experiments I performed it seems like the DBN's ability to use unlabeled data is its biggest strength when compared to a MLP;  pretraining could definitely be useful in the case where you have much more unlabeled data than labeled data. If labeled data is plentiful, however, it seems like pretraining does not provide many advantages over supervised techniques. Pretraining might have been more useful when DBN's were invented 10 years ago but with the power and speed of modern GPU's it is often more effective to do supervised training from the beginning.
 	
-	
+	If I were to continue working with this model I would definitely focus on its generative capabilities. I think there is some interesting potential there for creative systems designed to make unique items rather than classify them.  	
 	
 \end{document}
